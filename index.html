@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Complex 3D Scene with Three.js</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden; /* Ẩn thanh cuộn */
+            background-color: #000;
+            font-family: monospace;
+        }
+        canvas {
+            display: block;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 24px;
+            pointer-events: none;
+            transition: opacity 0.5s;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">Đang tải tài nguyên 3D...</div>
+
+    <!-- Import map để load Three.js từ CDN -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import Stats from 'three/addons/libs/stats.module.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { AfterimagePass } from 'three/addons/postprocessing/AfterimagePass.js';
+        import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+        import { RGBShiftShader } from 'three/addons/shaders/RGBShiftShader.js';
+        import { FilmPass } from 'three/addons/postprocessing/FilmPass.js';
+        import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+        import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
+
+        // 1. Cấu hình cơ bản (Scene, Camera, Renderer)
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050505);
+        scene.fog = new THREE.FogExp2(0x050505, 0.002);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 1000);
+        camera.position.set(0, 0, 50);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping; // Chuẩn điện ảnh, xử lý cháy sáng tốt hơn
+        renderer.toneMappingExposure = 0.85; // Giảm độ phơi sáng tổng thể
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        // 2. Thêm FPS Counter (Stats)
+        const stats = new Stats();
+        document.body.appendChild(stats.dom);
+
+        // 3. Điều khiển Camera (OrbitControls)
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // --- NÂNG CẤP: Post-processing (Hiệu ứng Bloom phát sáng) ---
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0.2; // Tăng ngưỡng để chỉ vùng rất sáng mới phát quang
+        bloomPass.strength = 0.5;  // Giảm độ mạnh để bớt chói
+        bloomPass.radius = 0.5;    // Bán kính lan tỏa
+        
+        const afterimagePass = new AfterimagePass();
+        afterimagePass.uniforms['damp'].value = 0.85; // Tạo hiệu ứng bóng mờ (trails)
+        
+        // --- NÂNG CẤP: Cinematic Effects (Hiệu ứng điện ảnh) ---
+        const effectFilm = new FilmPass(0.35, 0.025, 648, false); // Nhiễu hạt và scanlines
+        
+        const effectShift = new ShaderPass(RGBShiftShader); // Tách màu RGB
+        effectShift.uniforms['amount'].value = 0.0015;
+
+        // --- NÂNG CẤP: Depth of Field (Bokeh) ---
+        const bokehPass = new BokehPass(scene, camera, {
+            focus: 50.0,
+            aperture: 0.0001,
+            maxblur: 0.01,
+        });
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(afterimagePass);
+        composer.addPass(bloomPass);
+        composer.addPass(bokehPass);
+        composer.addPass(effectFilm);
+        composer.addPass(effectShift);
+
+        // --- NÂNG CẤP: Real-time Reflections (CubeCamera) ---
+        // Render cảnh xung quanh vào texture để vật thể phản chiếu (Rất nặng cho GPU)
+        const cubeRenderTarget = new THREE.WebGLCubeRenderTarget(256);
+        cubeRenderTarget.texture.type = THREE.HalfFloatType;
+        const cubeCamera = new THREE.CubeCamera(1, 1000, cubeRenderTarget);
+        scene.add(cubeCamera);
+
+        // 4. Tạo vật thể chính: Complex Torus Knot
+        // Lớp bên trong (Solid)
+        const geometry = new THREE.TorusKnotGeometry(10, 3, 300, 32); // Tăng độ chi tiết geometry cực cao
+        const material = new THREE.MeshPhysicalMaterial({ 
+            color: 0x156289, 
+            roughness: 0.05, // Bóng loáng để phản chiếu rõ nét
+            metalness: 1.0,
+            clearcoat: 1.0,
+            clearcoatRoughness: 0.1,
+            flatShading: false,
+            envMap: cubeRenderTarget.texture // Áp dụng texture phản chiếu thời gian thực
+        });
+        const torusKnot = new THREE.Mesh(geometry, material);
+        torusKnot.castShadow = true;
+        torusKnot.receiveShadow = true;
+        scene.add(torusKnot);
+
+        // Lớp bên ngoài (Wireframe)
+        const wireframeMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true, transparent: true, opacity: 0.1 }); // Giảm opacity để nhìn rõ lõi
+        const wireframeMesh = new THREE.Mesh(geometry, wireframeMat);
+        wireframeMesh.scale.setScalar(1.05); // Lớn hơn một chút để bao bọc
+        torusKnot.add(wireframeMesh);
+
+        // --- NÂNG CẤP: Quantum Core (Lõi lượng tử trung tâm) ---
+        // Một khối cầu dây cực kỳ chi tiết xoay nhanh ở giữa
+        const coreGeo = new THREE.IcosahedronGeometry(5, 6); // Detail level 6 = rất nhiều tam giác
+        const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.5 });
+        const quantumCore = new THREE.Mesh(coreGeo, coreMat);
+        scene.add(quantumCore);
+
+
+        // --- NÂNG CẤP: Thêm các vòng nhẫn xoay quanh (Gyroscope effect) ---
+        const rings = [];
+        const ringMat = new THREE.MeshBasicMaterial({ color: 0xff0080, wireframe: true, transparent: true, opacity: 0.5 });
+        for (let i = 0; i < 3; i++) {
+            const ringGeo = new THREE.TorusGeometry(16 + (i * 4), 0.2, 16, 100);
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            rings.push(ring);
+            scene.add(ring);
+        }
+
+        // --- NÂNG CẤP: Shader Material Object (Quả cầu biến dạng) ---
+        // Sử dụng GLSL Shader tùy chỉnh để tạo hiệu ứng sóng biến dạng phức tạp
+        const blobGeo = new THREE.IcosahedronGeometry(25, 4);
+        const blobMat = new THREE.ShaderMaterial({
+            uniforms: {
+                uTime: { value: 0 },
+                uColor: { value: new THREE.Color(0xaa00ff) }
+            },
+            vertexShader: `
+                uniform float uTime;
+                varying vec3 vNormal;
+                void main() {
+                    vNormal = normal;
+                    vec3 pos = position;
+                    // Biến dạng đỉnh dựa trên sóng sin/cos đa chiều
+                    float distortion = sin(pos.x * 0.1 + uTime) * cos(pos.y * 0.1 + uTime) * sin(pos.z * 0.1 + uTime);
+                    pos += normal * distortion * 5.0;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 uColor;
+                varying vec3 vNormal;
+                void main() {
+                    // Hiệu ứng phát sáng cạnh (Fresnel-like)
+                    float intensity = pow(0.7 - dot(vNormal, vec3(0, 0, 1.0)), 2.0);
+                    gl_FragColor = vec4(uColor * intensity + vec3(0.0, 0.1, 0.2), 0.3);
+                }
+            `,
+            wireframe: true,
+            transparent: true,
+            side: THREE.DoubleSide
+        });
+        const blob = new THREE.Mesh(blobGeo, blobMat);
+        scene.add(blob);
+
+        // --- NÂNG CẤP: Thêm các khối tinh thể trôi nổi ---
+        const crystals = [];
+        const crystalGeo = new THREE.OctahedronGeometry(1);
+        const crystalMat = new THREE.MeshStandardMaterial({ color: 0x00ff00, emissive: 0x00ff00, emissiveIntensity: 0.5, flatShading: true });
+        for (let i = 0; i < 30; i++) {
+            const crystal = new THREE.Mesh(crystalGeo, crystalMat);
+            crystal.position.set((Math.random() - 0.5) * 80, (Math.random() - 0.5) * 80, (Math.random() - 0.5) * 80);
+            crystals.push({ mesh: crystal, speed: Math.random() * 0.02 + 0.01, offset: Math.random() * 100 });
+            scene.add(crystal);
+        }
+
+        // --- NÂNG CẤP: Debris Field (Mảnh vỡ không gian - InstancedMesh) ---
+        // Tạo hàng ngàn khối lập phương nhỏ xoay quanh (Siêu nặng cho CPU/GPU)
+        const debrisCount = 3000;
+        const debrisGeo = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+        const debrisMat = new THREE.MeshStandardMaterial({ color: 0xffaa00, roughness: 0.4, metalness: 0.6 });
+        const debrisMesh = new THREE.InstancedMesh(debrisGeo, debrisMat, debrisCount);
+        debrisMesh.castShadow = true;
+        debrisMesh.receiveShadow = true;
+        
+        const dummy = new THREE.Object3D();
+        const debrisData = []; // Lưu dữ liệu để animate từng mảnh
+
+        for (let i = 0; i < debrisCount; i++) {
+            dummy.position.set((Math.random() - 0.5) * 150, (Math.random() - 0.5) * 150, (Math.random() - 0.5) * 150);
+            dummy.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+            dummy.updateMatrix();
+            debrisMesh.setMatrixAt(i, dummy.matrix);
+            debrisData.push({ 
+                rotSpeed: (Math.random() - 0.5) * 0.05, 
+                initialPos: dummy.position.clone(),
+                offset: Math.random() * 100
+            });
+        }
+        scene.add(debrisMesh);
+
+        // --- NÂNG CẤP: Vortex (Cơn lốc Tetrahedrons) ---
+        const vortexCount = 2000;
+        const vortexGeo = new THREE.TetrahedronGeometry(0.5);
+        const vortexMat = new THREE.MeshStandardMaterial({ color: 0xff00ff, roughness: 0.2, metalness: 0.8 });
+        const vortexMesh = new THREE.InstancedMesh(vortexGeo, vortexMat, vortexCount);
+        vortexMesh.castShadow = true;
+        vortexMesh.receiveShadow = true;
+
+        const vortexDummy = new THREE.Object3D();
+        const vortexData = [];
+        for(let i=0; i<vortexCount; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const radius = 30 + Math.random() * 50;
+            const y = (Math.random() - 0.5) * 60;
+            vortexData.push({ angle, radius, y, speed: 0.01 + Math.random() * 0.02 });
+            vortexDummy.position.set(Math.cos(angle)*radius, y, Math.sin(angle)*radius);
+            vortexDummy.updateMatrix();
+            vortexMesh.setMatrixAt(i, vortexDummy.matrix);
+        }
+        scene.add(vortexMesh);
+
+        // --- NÂNG CẤP: Cyber Floor (Sàn nhà chuyển động) ---
+        const floorSize = 20;
+        const floorCount = floorSize * floorSize;
+        const floorGeo = new THREE.BoxGeometry(4, 10, 4);
+        floorGeo.translate(0, 5, 0); // Đặt tâm xoay xuống đáy
+        const floorMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.9, roughness: 0.1 });
+        const floorMesh = new THREE.InstancedMesh(floorGeo, floorMat, floorCount);
+        floorMesh.receiveShadow = true;
+        floorMesh.position.y = -50;
+        
+        const floorDummy = new THREE.Object3D();
+        for(let i=0; i<floorSize; i++) {
+            for(let j=0; j<floorSize; j++) {
+                const index = i * floorSize + j;
+                floorDummy.position.set((i - floorSize/2) * 5, 0, (j - floorSize/2) * 5);
+                floorDummy.updateMatrix();
+                floorMesh.setMatrixAt(index, floorDummy.matrix);
+            }
+        }
+        scene.add(floorMesh);
+
+        // --- NÂNG CẤP: Satellites (Vệ tinh nhân tạo) ---
+        const satellites = [];
+        const satGeoCore = new THREE.DodecahedronGeometry(1);
+        const satGeoPanel = new THREE.BoxGeometry(0.2, 3, 6);
+        const satMat = new THREE.MeshStandardMaterial({ color: 0x00aaff, metalness: 1, roughness: 0.2 });
+
+        for(let i=0; i<6; i++) {
+            const satGroup = new THREE.Group();
+            const core = new THREE.Mesh(satGeoCore, satMat);
+            const panel1 = new THREE.Mesh(satGeoPanel, satMat);
+            panel1.position.x = -2;
+            const panel2 = new THREE.Mesh(satGeoPanel, satMat);
+            panel2.position.x = 2;
+            satGroup.add(core, panel1, panel2);
+            satGroup.castShadow = true;
+            
+            satGroup.userData = {
+                angle: Math.random() * Math.PI * 2,
+                radius: 40 + Math.random() * 20,
+                speed: 0.005 + Math.random() * 0.01,
+                yOffset: (Math.random() - 0.5) * 20
+            };
+            scene.add(satGroup);
+            satellites.push(satGroup);
+        }
+
+        // --- NÂNG CẤP: Data Streams (4 chuỗi xoắn DNA khổng lồ) ---
+        const streamCount = 4000;
+        const streamGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+        const streamMat = new THREE.MeshBasicMaterial({ color: 0x00ffaa, wireframe: false });
+        const streamMesh = new THREE.InstancedMesh(streamGeo, streamMat, streamCount);
+        
+        const streamDummy = new THREE.Object3D();
+        const streamData = [];
+        
+        for(let i=0; i<streamCount; i++) {
+            // Chia thành 4 nhánh
+            const branch = i % 4;
+            const t = Math.random() * 100; // Độ cao
+            const angle = t * 0.5 + (branch * (Math.PI / 2));
+            const radius = 60;
+            
+            streamDummy.position.set(Math.cos(angle) * radius, (t - 50) * 2, Math.sin(angle) * radius);
+            streamDummy.updateMatrix();
+            streamMesh.setMatrixAt(i, streamDummy.matrix);
+            
+            streamData.push({ branch, t, speed: 0.1 + Math.random() * 0.1, radius });
+        }
+        scene.add(streamMesh);
+
+        // --- NÂNG CẤP: Dyson Sphere Cage (Lồng bao quanh vũ trụ) ---
+        const cageGeo = new THREE.IcosahedronGeometry(200, 2);
+        const cageMat = new THREE.MeshBasicMaterial({ color: 0x444444, wireframe: true, transparent: true, opacity: 0.3 });
+        const cageMesh = new THREE.Mesh(cageGeo, cageMat);
+        scene.add(cageMesh);
+
+        // Lớp lồng thứ 2 nhỏ hơn, xoay ngược chiều
+        const cageGeo2 = new THREE.IcosahedronGeometry(180, 1);
+        const cageMat2 = new THREE.MeshBasicMaterial({ color: 0x666666, wireframe: true, transparent: true, opacity: 0.2 });
+        const cageMesh2 = new THREE.Mesh(cageGeo2, cageMat2);
+        scene.add(cageMesh2);
+
+        // --- NÂNG CẤP: Volumetric Fog (Sương mù thể tích di chuyển) ---
+        const fogGeo = new THREE.BoxGeometry(300, 300, 300);
+        const fogMat = new THREE.ShaderMaterial({
+            uniforms: {
+                uTime: { value: 0 },
+                uColor: { value: new THREE.Color(0x001133) } // Màu xanh đen bí ẩn
+            },
+            vertexShader: `
+                varying vec3 vPosition;
+                void main() {
+                    vPosition = position;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform float uTime;
+                uniform vec3 uColor;
+                varying vec3 vPosition;
+
+                // Hàm noise đơn giản từ sin/cos để tạo đám mây
+                float getNoise(vec3 p) {
+                    return sin(p.x * 0.05 + uTime * 0.5) * sin(p.y * 0.05 + uTime * 0.3) * sin(p.z * 0.05 + uTime * 0.2);
+                }
+
+                void main() {
+                    float n = getNoise(vPosition);
+                    // Tạo các mảng sương mù trôi nổi, mờ ảo
+                    float alpha = smoothstep(0.0, 0.8, n) * 0.05; // Giảm độ đặc của sương mù
+                    
+                    // Làm mờ dần ở các cạnh xa để không thấy khung hộp
+                    float dist = length(vPosition);
+                    alpha *= smoothstep(150.0, 50.0, dist);
+
+                    gl_FragColor = vec4(uColor + vec3(n * 0.1), alpha);
+                }
+            `,
+            transparent: true,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending
+        });
+        const fogMesh = new THREE.Mesh(fogGeo, fogMat);
+        scene.add(fogMesh);
+
+        // --- NÂNG CẤP: Menger Sponge Fractal (Cấu trúc phân hình) ---
+        // Tạo một khối fractal phức tạp bằng InstancedMesh
+        const spongeCount = 8000; // Level 3: 20^3 = 8000 khối
+        const spongeGeo = new THREE.BoxGeometry(1, 1, 1);
+        const spongeMat = new THREE.MeshStandardMaterial({ 
+            color: 0xcc3333, 
+            roughness: 0.3, 
+            metalness: 0.8 
+        });
+        const spongeMesh = new THREE.InstancedMesh(spongeGeo, spongeMat, spongeCount);
+        spongeMesh.castShadow = true;
+        spongeMesh.receiveShadow = true;
+
+        const spongeDummy = new THREE.Object3D();
+        let spongeIdx = 0;
+
+        function generateMenger(x, y, z, size, level) {
+            if (level === 0) {
+                spongeDummy.position.set(x, y, z);
+                spongeDummy.scale.set(size, size, size);
+                spongeDummy.updateMatrix();
+                if (spongeIdx < spongeCount) spongeMesh.setMatrixAt(spongeIdx++, spongeDummy.matrix);
+                return;
+            }
+            const newSize = size / 3;
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    for (let dz = -1; dz <= 1; dz++) {
+                        let zeros = 0;
+                        if (dx === 0) zeros++;
+                        if (dy === 0) zeros++;
+                        if (dz === 0) zeros++;
+                        if (zeros < 2) {
+                            generateMenger(x + dx * newSize, y + dy * newSize, z + dz * newSize, newSize, level - 1);
+                        }
+                    }
+                }
+            }
+        }
+        generateMenger(0, 0, 0, 180, 3); // Tạo fractal kích thước 180
+        scene.add(spongeMesh);
+
+        // --- NÂNG CẤP: Neural Network Lines (Các đường kết nối debris) ---
+        const lineCount = 500;
+        const lineGeo = new THREE.BufferGeometry();
+        const linePos = new Float32Array(lineCount * 2 * 3); // 2 points per line, 3 coords per point
+        lineGeo.setAttribute('position', new THREE.BufferAttribute(linePos, 3));
+        const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.3 });
+        const lineMesh = new THREE.LineSegments(lineGeo, lineMat);
+        scene.add(lineMesh);
+
+        // 5. Tạo hệ thống hạt (Particles/Stars)
+        const particlesGeometry = new THREE.BufferGeometry();
+        const particlesCount = 15000; // Tăng số lượng hạt lên 15,000
+        const posArray = new Float32Array(particlesCount * 3);
+
+        for(let i = 0; i < particlesCount * 3; i++) {
+            // Tạo vị trí ngẫu nhiên trong không gian rộng
+            posArray[i] = (Math.random() - 0.5) * 200; 
+        }
+
+        particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        const particlesMaterial = new THREE.PointsMaterial({
+            size: 0.2,
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.8,
+        });
+        const particlesMesh = new THREE.Points(particlesGeometry, particlesMaterial);
+        scene.add(particlesMesh);
+
+        // 6. Ánh sáng (Lighting)
+        const ambientLight = new THREE.AmbientLight(0x222222);
+        scene.add(ambientLight);
+
+        // Texture cho Lensflare
+        const textureLoader = new THREE.TextureLoader();
+        const textureFlare0 = textureLoader.load('https://unpkg.com/three@0.160.0/examples/textures/lensflare/lensflare0.png');
+        const textureFlare3 = textureLoader.load('https://unpkg.com/three@0.160.0/examples/textures/lensflare/lensflare3.png');
+
+        function addLensflare(light) {
+            const lensflare = new Lensflare();
+            lensflare.addElement(new LensflareElement(textureFlare0, 600, 0, light.color));
+            lensflare.addElement(new LensflareElement(textureFlare3, 60, 0.6));
+            lensflare.addElement(new LensflareElement(textureFlare3, 70, 0.7));
+            lensflare.addElement(new LensflareElement(textureFlare3, 120, 0.9));
+            lensflare.addElement(new LensflareElement(textureFlare3, 70, 1));
+            light.add(lensflare);
+        }
+
+        const pointLight1 = new THREE.PointLight(0xff0040, 200); // Giảm cường độ đèn
+        pointLight1.position.set(20, 20, 20);
+        pointLight1.castShadow = true;
+        addLensflare(pointLight1);
+        scene.add(pointLight1);
+
+        const pointLight2 = new THREE.PointLight(0x0040ff, 200);
+        pointLight2.position.set(-20, -20, 20);
+        pointLight2.castShadow = true;
+        addLensflare(pointLight2);
+        scene.add(pointLight2);
+
+        const pointLight3 = new THREE.PointLight(0x80ff80, 200);
+        pointLight3.position.set(0, 20, -20);
+        pointLight3.castShadow = true;
+        addLensflare(pointLight3);
+        scene.add(pointLight3);
+
+        // Helper để hiển thị vị trí đèn (tùy chọn, đã tắt để đẹp hơn)
+        // const sphereSize = 1;
+        // scene.add(new THREE.PointLightHelper(pointLight1, sphereSize));
+
+        // Ẩn loading text khi đã sẵn sàng
+        document.getElementById('loading').style.opacity = 0;
+
+        // 7. Vòng lặp Animation
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = Date.now() * 0.0005;
+
+            // Xoay vật thể chính
+            torusKnot.rotation.x += 0.005;
+            torusKnot.rotation.y += 0.005;
+
+            // Animation cho Quantum Core
+            quantumCore.rotation.y -= 0.02;
+            quantumCore.rotation.z += 0.01;
+            quantumCore.scale.setScalar(1 + Math.sin(time * 10) * 0.05); // Rung động nhanh
+
+            // Cập nhật Shader
+            blobMat.uniforms.uTime.value = time;
+            blob.rotation.y = time * 0.2;
+
+            // Cập nhật Reflection (Ẩn vật thể chính để không tự phản chiếu chính nó gây lỗi hình ảnh)
+            torusKnot.visible = false;
+            cubeCamera.update(renderer, scene);
+            torusKnot.visible = true;
+
+            // Animation cho Debris (Tính toán nặng mỗi khung hình)
+            for (let i = 0; i < debrisCount; i++) {
+                const data = debrisData[i];
+                dummy.position.copy(data.initialPos);
+                // Hiệu ứng sóng
+                dummy.position.y += Math.sin(time * 2 + data.offset) * 5;
+                dummy.rotation.x += data.rotSpeed;
+                dummy.rotation.y += data.rotSpeed;
+                dummy.updateMatrix();
+                debrisMesh.setMatrixAt(i, dummy.matrix);
+            }
+            debrisMesh.instanceMatrix.needsUpdate = true;
+
+            // Animation cho Neural Lines (Kết nối các debris ngẫu nhiên)
+            const positions = lineMesh.geometry.attributes.position.array;
+            const v1 = new THREE.Vector3();
+            const v2 = new THREE.Vector3();
+            let lineIdx = 0;
+            
+            for(let i = 0; i < lineCount; i++) {
+                const idx1 = i % debrisCount;
+                const idx2 = (i + 500) % debrisCount; // Offset khác để nối xa hơn
+                
+                debrisMesh.getMatrixAt(idx1, dummy.matrix);
+                v1.setFromMatrixPosition(dummy.matrix);
+                
+                debrisMesh.getMatrixAt(idx2, dummy.matrix);
+                v2.setFromMatrixPosition(dummy.matrix);
+
+                positions[lineIdx++] = v1.x; positions[lineIdx++] = v1.y; positions[lineIdx++] = v1.z;
+                positions[lineIdx++] = v2.x; positions[lineIdx++] = v2.y; positions[lineIdx++] = v2.z;
+            }
+            lineMesh.geometry.attributes.position.needsUpdate = true;
+
+            // Animation cho Menger Sponge
+            spongeMesh.rotation.x = time * 0.05;
+            spongeMesh.rotation.y = time * 0.05;
+
+            // Animation cho Vortex
+            for(let i=0; i<vortexCount; i++) {
+                const data = vortexData[i];
+                data.angle += data.speed;
+                const r = data.radius + Math.sin(time * 3 + i) * 2;
+                vortexDummy.position.set(Math.cos(data.angle)*r, data.y, Math.sin(data.angle)*r);
+                vortexDummy.rotation.x += 0.05;
+                vortexDummy.rotation.z += 0.05;
+                vortexDummy.updateMatrix();
+                vortexMesh.setMatrixAt(i, vortexDummy.matrix);
+            }
+            vortexMesh.instanceMatrix.needsUpdate = true;
+
+            // Animation cho Floor
+            for(let i=0; i<floorSize; i++) {
+                for(let j=0; j<floorSize; j++) {
+                    const index = i * floorSize + j;
+                    floorDummy.position.set((i - floorSize/2) * 5, 0, (j - floorSize/2) * 5);
+                    const scaleY = 1 + Math.sin(time * 2 + i * 0.3 + j * 0.3) * 0.8;
+                    floorDummy.scale.set(1, scaleY, 1);
+                    floorDummy.updateMatrix();
+                    floorMesh.setMatrixAt(index, floorDummy.matrix);
+                }
+            }
+            floorMesh.instanceMatrix.needsUpdate = true;
+
+            // Animation cho Satellites
+            satellites.forEach(sat => {
+                sat.userData.angle += sat.userData.speed;
+                sat.position.x = Math.cos(sat.userData.angle) * sat.userData.radius;
+                sat.position.z = Math.sin(sat.userData.angle) * sat.userData.radius;
+                sat.position.y = Math.sin(time + sat.userData.yOffset) * 10;
+                sat.lookAt(0, 0, 0);
+                sat.rotateZ(time);
+            });
+
+            // Animation cho Data Streams
+            for(let i=0; i<streamCount; i++) {
+                const data = streamData[i];
+                data.t += data.speed;
+                if(data.t > 100) data.t = 0; // Reset khi lên đỉnh
+
+                const angle = data.t * 0.5 + (data.branch * (Math.PI / 2)) + time * 0.2;
+                const y = (data.t - 50) * 3;
+                
+                streamDummy.position.set(Math.cos(angle) * data.radius, y, Math.sin(angle) * data.radius);
+                streamDummy.rotation.set(time, time, time);
+                streamDummy.updateMatrix();
+                streamMesh.setMatrixAt(i, streamDummy.matrix);
+            }
+            streamMesh.instanceMatrix.needsUpdate = true;
+
+            // Animation cho Dyson Cage
+            cageMesh.rotation.y = time * 0.02;
+            cageMesh.rotation.z = time * 0.01;
+            cageMesh2.rotation.y = -time * 0.03;
+            cageMesh2.rotation.x = time * 0.02;
+
+            // Animation cho Volumetric Fog
+            fogMat.uniforms.uTime.value = time;
+
+            // Cập nhật tiêu cự cho Bokeh (tự động lấy nét vào tâm)
+            bokehPass.uniforms['focus'].value = camera.position.length();
+
+            // Hiệu ứng RGB Shift đập theo nhịp
+            effectShift.uniforms['amount'].value = 0.0015 + Math.sin(time * 5) * 0.001;
+
+            // Animation cho các vòng nhẫn
+            rings.forEach((ring, i) => {
+                ring.rotation.x += 0.002 * (i + 1);
+                ring.rotation.y += 0.002 * (i + 1);
+            });
+
+            // Animation cho tinh thể
+            crystals.forEach(c => {
+                c.mesh.rotation.x += c.speed;
+                c.mesh.rotation.y += c.speed;
+                c.mesh.position.y += Math.sin(time * 2 + c.offset) * 0.05; // Nhấp nhô nhẹ
+            });
+
+            // Di chuyển đèn xung quanh
+            pointLight1.position.x = Math.sin(time * 0.7) * 30;
+            pointLight1.position.y = Math.cos(time * 0.5) * 40;
+            pointLight1.position.z = Math.cos(time * 0.3) * 30;
+
+            pointLight2.position.x = Math.cos(time * 0.3) * 30;
+            pointLight2.position.y = Math.sin(time * 0.5) * 40;
+            pointLight2.position.z = Math.sin(time * 0.7) * 30;
+
+            // Xoay nhẹ hệ thống hạt
+            particlesMesh.rotation.y = -time * 0.1;
+            particlesMesh.rotation.x = time * 0.05;
+
+            controls.update(); // Cập nhật controls
+            stats.update();    // Cập nhật FPS
+            // renderer.render(scene, camera); // Thay thế bằng composer để có hiệu ứng Bloom
+            composer.render();
+        }
+
+        // 8. Xử lý khi thay đổi kích thước cửa sổ
+        window.addEventListener('resize', onWindowResize, false);
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        animate();
+    </script>
+</body>
+</html>
